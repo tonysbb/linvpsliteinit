@@ -1,6 +1,5 @@
 <div align="center">
 
-![linvpsliteinit banner](./assets/banner.svg)
 
 # linvpsliteinit — Lightweight VPS Initialization Toolkit
 
