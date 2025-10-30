@@ -102,5 +102,25 @@ sudo ./add_components_ChatGPT.sh
 
 ---
 
+## 📊 Audit & Documentation
+
+A comprehensive robustness audit has been conducted on this toolkit. For detailed findings and improvement roadmap, see:
+
+- **[Executive Summary](docs/EXECUTIVE_SUMMARY.md)** - For stakeholders and leadership
+- **[Audit Summary](docs/AUDIT_SUMMARY.md)** - Quick reference guide
+- **[Full Audit Report](docs/ROBUSTNESS_AUDIT_REPORT.md)** - Detailed technical analysis
+- **[Documentation Index](docs/README.md)** - Complete documentation listing
+
+**Current Robustness Score**: 6.5/10  
+**Status**: ⚠️ Critical fixes recommended before production use
+
+Key findings:
+- 3 critical issues identified (including structural SWAP bug)
+- 4 high-priority security improvements needed
+- Estimated 3 days to address critical issues
+- Full production readiness achievable in 2-3 weeks
+
+---
+
 ## 📜 License
 MIT — see [LICENSE](./LICENSE)
