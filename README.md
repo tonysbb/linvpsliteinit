@@ -36,13 +36,13 @@ git clone https://github.com/tonysbb/linvpsliteinit.git
 cd linvpsliteinit
 
 # Make executable
-chmod +x vps_init_final_ChatGPT.sh add_components_ChatGPT.sh
+chmod +x vps_init.sh add_components.sh
 
 # Initialize (recommended on a fresh VPS)
-sudo ./vps_init_final_ChatGPT.sh
+sudo ./vps_init.sh
 
 # Add components later as needed
-sudo ./add_components_ChatGPT.sh
+sudo ./add_components.sh
 ```
 
 ### ☝️ One-liner (use with caution)
@@ -50,33 +50,33 @@ sudo ./add_components_ChatGPT.sh
 
 ```bash
 # Initialization script
-curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/vps_init_final_ChatGPT.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/vps_init.sh | sudo bash
 
 # Components script
-curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_components_ChatGPT.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_components.sh | sudo bash
 ```
 
 Alternatively (download then run):
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/vps_init_final_ChatGPT.sh
-curl -fsSLO https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_components_ChatGPT.sh
+curl -fsSLO https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/vps_init.sh
+curl -fsSLO https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_components.sh
 chmod +x *.sh
-sudo ./vps_init_final_ChatGPT.sh
-sudo ./add_components_ChatGPT.sh
+sudo ./vps_init.sh
+sudo ./add_components.sh
 ```
 
 ---
 
 ## 🧩 Modules
-### 1) Initialization — `vps_init_final_ChatGPT.sh`
+### 1) Initialization — `vps_init.sh`
 - Hostname & Timezone (RFC 1123 compliant)
 - SWAP: dynamic sizing, deduplication for Debian 11
 - UFW: deny inbound, allow outbound
 - Fail2Ban: optional security layer
 - BBR: enabled if supported
 
-### 2) Components — `add_components_ChatGPT.sh`
+### 2) Components — `add_components.sh`
 - Re-runnable menu installer:
   - SWAP reconfiguration
   - Fail2Ban
