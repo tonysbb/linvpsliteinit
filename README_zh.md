@@ -22,16 +22,16 @@
 ```bash
 git clone https://github.com/tonysbb/linvpsliteinit.git
 cd linvpsliteinit
-chmod +x vps_init_final_ChatGPT.sh add_components_ChatGPT.sh
-sudo ./vps_init_final_ChatGPT.sh
-sudo ./add_components_ChatGPT.sh
+chmod +x vps_init.sh add_components.sh
+sudo ./vps_init.sh
+sudo ./add_components.sh
 ```
 
 ### ☝️ 一键安装（请谨慎使用）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/vps_init_final_ChatGPT.sh | sudo bash
-curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_components_ChatGPT.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/vps_init.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_components.sh | sudo bash
 ```
 
 ---
