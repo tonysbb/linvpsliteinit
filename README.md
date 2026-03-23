@@ -1,28 +1,28 @@
 <div align="center">
 
-
 # linvpsliteinit — Lightweight VPS Initialization Toolkit
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-![Platform](https://img.shields.io/badge/Platform-Debian%20%7C%20Ubuntu-green.svg)
-![Shell](https://img.shields.io/badge/Shell-bash-lightgrey.svg)
+![Platform](https://img.shields.io/badge/Platform-Debian%20%7C%20Ubuntu%20%7C%20Alpine-green.svg)
+![Shell](https://img.shields.io/badge/Shell-POSIX%20sh-lightgrey.svg)
 ![PRs](https://img.shields.io/badge/PRs-welcome-orange.svg)
 
 **English** · [🇨🇳 中文](./README_zh.md) · [🇯🇵 日本語](./README_ja.md)
 
 </div>
 
-`linvpsliteinit` is a **lightweight, interactive VPS setup toolkit** for **Debian & Ubuntu**.  
+`linvpsliteinit` is a **lightweight, interactive VPS setup toolkit** for **Debian, Ubuntu, and Alpine Linux**.  
 It ships a one-pass initialization script and a re-runnable components installer.
 
 ---
 
 ## ✨ Features at a Glance
-- **Init once, skip freely**: hostname, timezone, UFW, Fail2Ban, SWAP, BBR  
-- **Add later, safely**: re-run the components installer any time  
-- **Smart SWAP**: sensible defaults; Debian 11 de-dup; Debian 12 untouched  
-- **Secure baseline**: deny inbound by default, allow chosen SSH; Fail2Ban enabled  
-- **Global-ready**: clear English comments; tested on Debian 11/12 & Ubuntu LTS  
+- **Init once, skip freely**: hostname, timezone, firewall, Fail2Ban, SWAP, BBR
+- **Add later, safely**: re-run the components installer any time
+- **Smart SWAP**: sensible defaults; Debian 11 de-dup; Debian 12 untouched
+- **Secure baseline**: deny inbound by default, allow chosen SSH port; Fail2Ban on Debian/Ubuntu
+- **Alpine support**: iptables firewall, OpenRC services, POSIX sh — no bash required
+- **Global-ready**: clear English comments; tested on Debian 11/12, Ubuntu LTS, Alpine 3.22+
 
 ---
 
@@ -46,14 +46,14 @@ sudo ./add_components.sh
 ```
 
 ### ☝️ One-liner (use with caution)
-> Read the script first if possible. One-liners are convenient but risky if you don’t audit code.
+> Read the script first if possible. One-liners are convenient but risky if you don't audit code.
 
 ```bash
 # Initialization script
-curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/vps_init.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/vps_init.sh | sudo sh
 
 # Components script
-curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_components.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_components.sh | sudo sh
 ```
 
 Alternatively (download then run):
@@ -69,36 +69,46 @@ sudo ./add_components.sh
 ---
 
 ## 🧩 Modules
+
 ### 1) Initialization — `vps_init.sh`
 - Hostname & Timezone (RFC 1123 compliant)
 - SWAP: dynamic sizing, deduplication for Debian 11
-- UFW: deny inbound, allow outbound
-- Fail2Ban: optional security layer
-- BBR: enabled if supported
+- Firewall: UFW + Fail2Ban on Debian/Ubuntu; iptables on Alpine
+- BBR: enabled if supported by kernel
 
 ### 2) Components — `add_components.sh`
 - Re-runnable menu installer:
   - SWAP reconfiguration
-  - Fail2Ban
-  - Docker (official repo)
-  - Extend as needed
+  - Firewall (UFW + Fail2Ban / iptables)
+  - BBR
+  - Hostname & Timezone
+  - Docker (official repo on Debian/Ubuntu; Alpine package on Alpine)
+  - FRPS (OpenRC service on Alpine; systemd on Debian/Ubuntu)
 
 ---
 
 ## 🛠️ Compatibility
-- Debian **11** (Bullseye), **12** (Bookworm)
-- Ubuntu **20.04 / 22.04 / 24.04** LTS
 
-> Some VPS images ship with **cloud-init** which can override hostname/network configs.  
-> Check `/etc/cloud/cloud.cfg` (`preserve_hostname`) if changes don’t persist.
+| OS | Version | Firewall | Service Manager |
+|----|---------|----------|----------------|
+| Debian | 11 (Bullseye), 12 (Bookworm) | UFW + Fail2Ban | systemd |
+| Ubuntu | 20.04 / 22.04 / 24.04 LTS | UFW + Fail2Ban | systemd |
+| Alpine | 3.22+ | iptables | OpenRC |
+
+> **cloud-init**: Some VPS images override hostname/network on boot.  
+> Check `/etc/cloud/cloud.cfg` (`preserve_hostname`) on Debian/Ubuntu if changes don't persist.  
+> On Alpine NAT VPS, hostname may be injected by the host — the script handles this automatically via `/etc/local.d/hostname.start`.
+
+> **NAT VPS**: If ports above 10000 are used, ensure your provider's port mapping matches the ports configured in the script.
 
 ---
 
 ## 🔒 Security Notes
 - Run as **root**
 - Hostname must comply with RFC 1123
-- UFW defaults: deny inbound, allow outbound
-- Fail2Ban defends against SSH brute-force
+- **Debian/Ubuntu**: UFW defaults to deny inbound / allow outbound; Fail2Ban defends against SSH brute-force
+- **Alpine**: iptables defaults to DROP inbound; key-only SSH configured by `vps_init.sh`
+- Private key is generated server-side and displayed once — save it immediately, it is deleted after confirmation
 
 ---
 
