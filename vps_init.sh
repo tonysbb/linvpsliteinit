@@ -21,8 +21,35 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; NC
 # individually with explicit checks.
 
 LOG_FILE="/root/vps_init_$(date +%Y%m%d_%H%M%S).log"
-exec > "$LOG_FILE" 2>&1  # NOTE: `>(tee ...)` is a bashism; not supported in ash.
-                         # Logging to file only; operator can tail -f separately.
+
+start_logging() {
+    if ! command -v mkfifo > /dev/null 2>&1; then
+        exec > "$LOG_FILE" 2>&1
+        return
+    fi
+
+    LOG_PIPE="/tmp/vps_init_$$.pipe"
+    rm -f "$LOG_PIPE"
+    if ! mkfifo "$LOG_PIPE"; then
+        exec > "$LOG_FILE" 2>&1
+        return
+    fi
+
+    tee -a "$LOG_FILE" < "$LOG_PIPE" &
+    TEE_PID=$!
+    exec > "$LOG_PIPE" 2>&1
+    rm -f "$LOG_PIPE"
+}
+
+cleanup_logging() {
+    if [ -n "${TEE_PID:-}" ]; then
+        wait "$TEE_PID" 2>/dev/null || true
+    fi
+}
+
+start_logging
+trap cleanup_logging EXIT
+printf "${GREEN}Script started. Log: ${YELLOW}%s${NC}\n" "$LOG_FILE"
 
 # --- OS Detection ---
 # Detect OS once at startup; all functions branch on this variable.
