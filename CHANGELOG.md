@@ -2,6 +2,12 @@
 
 All commit summaries recorded by deploy.sh.
 
+## [2026-03-27 19:06:22]
+
+```text
+fix: avoid final summary printf errors and exit hang
+```
+
 ## [2026-03-27 18:52:27]
 
 ```text

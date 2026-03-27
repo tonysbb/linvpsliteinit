@@ -23,6 +23,8 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; NC
 LOG_FILE="/root/vps_init_$(date +%Y%m%d_%H%M%S).log"
 
 start_logging() {
+    exec 3>&1 4>&2
+
     if ! command -v mkfifo > /dev/null 2>&1; then
         exec > "$LOG_FILE" 2>&1
         return
@@ -43,7 +45,11 @@ start_logging() {
 
 cleanup_logging() {
     if [ -n "${TEE_PID:-}" ]; then
+        exec 1>&3 2>&4
+        exec 3>&- 4>&-
         wait "$TEE_PID" 2>/dev/null || true
+    else
+        exec 3>&- 4>&-
     fi
 }
 
@@ -648,7 +654,7 @@ EOF
 
 display_summary() {
     print_step "Final Summary"
-    printf "------------ System Initialization Complete ------------\n"
+    printf -- "------------ System Initialization Complete ------------\n"
     printf "  Hostname:\t\t%s\n"             "$SUMMARY_HOSTNAME"
     printf "  Timezone:\t\t%s\n"             "$SUMMARY_TIMEZONE"
     printf "  SSH Port:\t\t${GREEN}%s (Verified)${NC}\n" "$SUMMARY_SSH_PORT"
@@ -660,7 +666,7 @@ display_summary() {
     printf "  FRPS:\t\t\t%s\n"              "$SUMMARY_FRP_STATUS"
     printf "  OS:\t\t\t%s\n"               "$OS"
     printf "  Log:\t\t\t%s\n"              "$LOG_FILE"
-    printf "----------------------------------------------------\n"
+    printf -- "----------------------------------------------------\n"
     printf "\n${RED}IMPORTANT: Use SSH port ${GREEN}%s${NC}${RED} with your saved private key to reconnect.${NC}\n" \
         "$SUMMARY_SSH_PORT"
     if [ "$SUMMARY_FIREWALL_STATUS" = "Skipped" ]; then

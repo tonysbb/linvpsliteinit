@@ -17,6 +17,8 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; NC
 LOG_FILE="/root/components_manager_$(date +%Y%m%d_%H%M%S).log"
 
 start_logging() {
+    exec 3>&1 4>&2
+
     if ! command -v mkfifo > /dev/null 2>&1; then
         exec > "$LOG_FILE" 2>&1
         return
@@ -37,7 +39,11 @@ start_logging() {
 
 cleanup_logging() {
     if [ -n "${TEE_PID:-}" ]; then
+        exec 1>&3 2>&4
+        exec 3>&- 4>&-
         wait "$TEE_PID" 2>/dev/null || true
+    else
+        exec 3>&- 4>&-
     fi
 }
 
@@ -443,17 +449,17 @@ main() {
     while true; do
         printf "\n${BLUE}VPS Component Manager${NC}\n"
         printf "OS: %s\n" "$OS"
-        printf "-------------------------------------------\n"
+        printf -- "-------------------------------------------\n"
         printf " 1) Configure SWAP\n"
         printf " 2) Setup Security (Firewall + Fail2ban)\n"
         printf " 3) Enable BBR\n"
         printf " 4) Set Hostname & Timezone\n"
         printf " 5) Install Docker\n"
         printf " 6) Install FRPS\n"
-        printf "-------------------------------------------\n"
+        printf -- "-------------------------------------------\n"
         printf " 99) Guided Install (all components)\n"
         printf " 0) Exit\n"
-        printf "-------------------------------------------\n"
+        printf -- "-------------------------------------------\n"
         printf "Enter your choice: "; read -r choice
 
         case "$choice" in
