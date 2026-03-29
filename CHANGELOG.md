@@ -2,6 +2,12 @@
 
 All commit summaries recorded by deploy.sh.
 
+## [2026-03-30 00:32:00]
+
+```text
+refactor: streamline prompts and align docs
+```
+
 ## [2026-03-27 19:06:22]
 
 ```text

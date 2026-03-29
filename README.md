@@ -76,6 +76,9 @@ sudo ./add_components.sh
 - Firewall: UFW + Fail2Ban on Debian/Ubuntu; iptables on Alpine
 - BBR: enabled if supported by kernel
 
+During initialization, hostname and timezone are prompted separately.
+On Debian/Ubuntu, choosing the firewall step configures UFW directly, then asks whether to enable Fail2Ban.
+
 ### 2) Components — `add_components.sh`
 - Re-runnable menu installer:
   - SWAP reconfiguration
@@ -84,6 +87,8 @@ sudo ./add_components.sh
   - Hostname & Timezone
   - Docker (official repo on Debian/Ubuntu; Alpine package on Alpine)
   - FRPS (OpenRC service on Alpine; systemd on Debian/Ubuntu)
+
+In Guided Install, the Hostname/Timezone step opens directly and each field can be skipped independently.
 
 ---
 

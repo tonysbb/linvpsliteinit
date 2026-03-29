@@ -474,7 +474,7 @@ main() {
                 prompt_yes_no "Configure SWAP?"       && configure_swap
                 prompt_yes_no "Setup Security?"       && setup_security_tools
                 prompt_yes_no "Enable BBR?"           && enable_bbr
-                prompt_yes_no "Set Hostname/Timezone?" && set_hostname_timezone
+                set_hostname_timezone
                 prompt_yes_no "Install Docker?"       && install_docker
                 prompt_yes_no "Install FRPS?"         && install_frp
                 printf "${GREEN}\nGuided Installation finished.${NC}\n"

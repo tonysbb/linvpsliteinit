@@ -376,17 +376,16 @@ IEOF
 }
 
 setup_security_debian() {
-    if prompt_yes_no "Install UFW Firewall?"; then
-        apt-get install -y ufw
-        ufw allow "$SUMMARY_SSH_PORT/tcp"
-        ufw --force enable
-        SUMMARY_FIREWALL_STATUS="UFW Enabled"
-        SUMMARY_FIREWALL_PORTS="$SUMMARY_SSH_PORT"
-        printf "${GREEN}UFW enabled for port %s.${NC}\n" "$SUMMARY_SSH_PORT"
+    apt-get install -y ufw
+    ufw allow "$SUMMARY_SSH_PORT/tcp"
+    ufw --force enable
+    SUMMARY_FIREWALL_STATUS="UFW Enabled"
+    SUMMARY_FIREWALL_PORTS="$SUMMARY_SSH_PORT"
+    printf "${GREEN}UFW enabled for port %s.${NC}\n" "$SUMMARY_SSH_PORT"
 
-        if prompt_yes_no "Install Fail2ban?"; then
-            apt-get install -y fail2ban
-            cat > /etc/fail2ban/jail.d/sshd.local << EOF
+    if prompt_yes_no "Install Fail2ban?"; then
+        apt-get install -y fail2ban
+        cat > /etc/fail2ban/jail.d/sshd.local << EOF
 [sshd]
 enabled      = true
 port         = $SUMMARY_SSH_PORT
@@ -394,18 +393,15 @@ backend      = systemd
 journalmatch = _SYSTEMD_UNIT=sshd.service + _COMM=sshd
 banaction    = ufw
 EOF
-            systemctl restart fail2ban
-            sleep 3
-            if systemctl is-active --quiet fail2ban; then
-                SUMMARY_FAIL2BAN_STATUS="Enabled (monitoring SSH)"
-                printf "${GREEN}Fail2ban started successfully.${NC}\n"
-            else
-                SUMMARY_FAIL2BAN_STATUS="FAILED to start"
-                printf "${RED}Fail2ban failed to start! Check logs.${NC}\n"
-            fi
+        systemctl restart fail2ban
+        sleep 3
+        if systemctl is-active --quiet fail2ban; then
+            SUMMARY_FAIL2BAN_STATUS="Enabled (monitoring SSH)"
+            printf "${GREEN}Fail2ban started successfully.${NC}\n"
+        else
+            SUMMARY_FAIL2BAN_STATUS="FAILED to start"
+            printf "${RED}Fail2ban failed to start! Check logs.${NC}\n"
         fi
-    else
-        printf "${YELLOW}Skipping firewall. WARNING: Server may be exposed!${NC}\n"
     fi
 }
 
@@ -701,9 +697,7 @@ main() {
         SUMMARY_BBR_STATUS="Skipped by user"
     fi
 
-    if prompt_yes_no "Set Hostname & Timezone?"; then
-        set_hostname_timezone
-    fi
+    set_hostname_timezone
 
     if prompt_yes_no "Install Docker?"; then
         install_docker

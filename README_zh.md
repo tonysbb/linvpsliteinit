@@ -45,6 +45,9 @@ curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_com
 - 防火墙：Debian/Ubuntu 使用 UFW + Fail2Ban；Alpine 使用 iptables
 - BBR：内核支持时自动启用
 
+初始化过程中，主机名和时区会分别单独询问。
+在 Debian/Ubuntu 上，确认进入防火墙步骤后会直接配置 UFW，再单独询问是否启用 Fail2Ban。
+
 ### 2) 组件脚本 `add_components.sh`
 可重复执行的菜单式安装器，支持：
 - SWAP 配置
@@ -53,6 +56,8 @@ curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_com
 - 主机名与时区
 - Docker（Debian/Ubuntu 使用官方源；Alpine 使用系统包）
 - FRPS（Alpine 使用 OpenRC；Debian/Ubuntu 使用 systemd）
+
+Guided Install 模式下会直接进入“主机名与时区”子步骤，主机名和时区都可以分别跳过。
 
 ---
 

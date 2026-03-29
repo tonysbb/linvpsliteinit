@@ -44,6 +44,9 @@ curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_com
 - ファイアウォール：Debian/Ubuntu は UFW + Fail2Ban；Alpine は iptables
 - BBR：カーネルが対応している場合に有効化
 
+初期化中、ホスト名とタイムゾーンは別々に確認されます。
+Debian/Ubuntu では、ファイアウォール手順を選ぶと UFW をそのまま設定し、その後 Fail2Ban を有効化するか確認します。
+
 ### 2) コンポーネントスクリプト `add_components.sh`
 再実行可能なメニュー形式のインストーラー：
 - SWAP 設定
@@ -52,6 +55,8 @@ curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_com
 - ホスト名・タイムゾーン
 - Docker（Debian/Ubuntu は公式リポジトリ；Alpine はシステムパッケージ）
 - FRPS（Alpine は OpenRC；Debian/Ubuntu は systemd）
+
+Guided Install では「ホスト名・タイムゾーン」手順に直接入り、それぞれ個別にスキップできます。
 
 ---
 
