@@ -340,6 +340,89 @@ install_docker() {
     fi
 }
 
+install_tmux() {
+    printf "\n${BLUE}--- Installing tmux ---${NC}\n"
+    if command -v tmux > /dev/null 2>&1; then
+        printf "${YELLOW}tmux already installed.${NC}\n"; return
+    fi
+
+    if [ "$OS" = "alpine" ]; then
+        apk add --no-cache tmux
+    else
+        apt-get install -y tmux
+    fi
+
+    if command -v tmux > /dev/null 2>&1; then
+        printf "${GREEN}tmux installed successfully.${NC}\n"
+    else
+        printf "${RED}tmux installation failed.${NC}\n"
+    fi
+}
+
+install_mosh() {
+    printf "\n${BLUE}--- Installing mosh ---${NC}\n"
+
+    if command -v mosh-server > /dev/null 2>&1; then
+        printf "${YELLOW}mosh already installed. Continuing with firewall configuration.${NC}\n"
+    else
+        if [ "$OS" = "alpine" ]; then
+            apk add --no-cache mosh
+        else
+            apt-get install -y mosh
+        fi
+
+        if ! command -v mosh-server > /dev/null 2>&1; then
+            printf "${RED}mosh installation failed.${NC}\n"
+            return 1
+        fi
+        printf "${GREEN}mosh installed successfully.${NC}\n"
+    fi
+
+    ssh_port=$(grep -E "^Port " /etc/ssh/sshd_config | awk '{print $2}' | head -n 1)
+    ssh_port="${ssh_port:-22}"
+    printf "mosh still uses SSH for login. Detected SSH port: %s\n" "$ssh_port"
+
+    printf "Enter mosh UDP start port [60000]: "; read -r mosh_start_port
+    mosh_start_port="${mosh_start_port:-60000}"
+    printf "Enter mosh UDP end port [61000]: "; read -r mosh_end_port
+    mosh_end_port="${mosh_end_port:-61000}"
+
+    case "$mosh_start_port:$mosh_end_port" in
+        *[!0-9:]*|:|*::*) printf "${RED}Invalid mosh port range.${NC}\n"; return 1 ;;
+    esac
+
+    if [ "$mosh_start_port" -lt 1 ] || [ "$mosh_start_port" -gt 65535 ] || \
+       [ "$mosh_end_port" -lt 1 ] || [ "$mosh_end_port" -gt 65535 ] || \
+       [ "$mosh_start_port" -gt "$mosh_end_port" ]; then
+        printf "${RED}mosh port range must be 1-65535 and start <= end.${NC}\n"
+        return 1
+    fi
+
+    mosh_range="${mosh_start_port}:${mosh_end_port}"
+
+    if [ "$OS" = "alpine" ]; then
+        if command -v iptables > /dev/null 2>&1 && iptables -L INPUT > /dev/null 2>&1; then
+            iptables -C INPUT -p udp --dport "$mosh_range" -j ACCEPT 2>/dev/null || \
+                iptables -A INPUT -p udp --dport "$mosh_range" -j ACCEPT
+            iptables-save > /etc/iptables/rules.v4
+            printf "iptables rule added for UDP %s-%s.\n" "$mosh_start_port" "$mosh_end_port"
+        else
+            printf "${YELLOW}iptables not active. Open UDP %s-%s manually if needed.${NC}\n" \
+                "$mosh_start_port" "$mosh_end_port"
+        fi
+    else
+        if command -v ufw > /dev/null 2>&1 && ufw status 2>/dev/null | grep -q "^Status: active"; then
+            ufw allow "${mosh_start_port}:${mosh_end_port}/udp"
+            printf "UFW rule added for UDP %s-%s.\n" "$mosh_start_port" "$mosh_end_port"
+        else
+            printf "${YELLOW}UFW not active. Open UDP %s-%s manually if needed.${NC}\n" \
+                "$mosh_start_port" "$mosh_end_port"
+        fi
+    fi
+
+    printf "${GREEN}mosh ready.${NC}\n"
+}
+
 install_frp() {
     printf "\n${BLUE}--- Installing FRPS ---${NC}\n"
 
@@ -455,7 +538,9 @@ main() {
         printf " 3) Enable BBR\n"
         printf " 4) Set Hostname & Timezone\n"
         printf " 5) Install Docker\n"
-        printf " 6) Install FRPS\n"
+        printf " 6) Install tmux\n"
+        printf " 7) Install mosh\n"
+        printf " 8) Install FRPS\n"
         printf -- "-------------------------------------------\n"
         printf " 99) Guided Install (all components)\n"
         printf " 0) Exit\n"
@@ -468,7 +553,9 @@ main() {
             3) enable_bbr ;;
             4) set_hostname_timezone ;;
             5) install_docker ;;
-            6) install_frp ;;
+            6) install_tmux ;;
+            7) install_mosh ;;
+            8) install_frp ;;
             99)
                 printf "${YELLOW}\nStarting Guided Installation...${NC}\n"
                 prompt_yes_no "Configure SWAP?"       && configure_swap
@@ -476,6 +563,8 @@ main() {
                 prompt_yes_no "Enable BBR?"           && enable_bbr
                 set_hostname_timezone
                 prompt_yes_no "Install Docker?"       && install_docker
+                prompt_yes_no "Install tmux?"         && install_tmux
+                prompt_yes_no "Install mosh?"         && install_mosh
                 prompt_yes_no "Install FRPS?"         && install_frp
                 printf "${GREEN}\nGuided Installation finished.${NC}\n"
                 ;;

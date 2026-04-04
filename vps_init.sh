@@ -108,6 +108,8 @@ SUMMARY_FIREWALL_PORTS="N/A"
 SUMMARY_FAIL2BAN_STATUS="Skipped"
 SUMMARY_BBR_STATUS="Skipped"
 SUMMARY_DOCKER_STATUS="Skipped"
+SUMMARY_TMUX_STATUS="Skipped"
+SUMMARY_MOSH_STATUS="Skipped"
 SUMMARY_FRP_STATUS="Skipped"
 
 # --- Helper Functions ---
@@ -538,6 +540,95 @@ install_docker() {
     fi
 }
 
+install_tmux() {
+    print_step "Install tmux"
+    if command -v tmux > /dev/null 2>&1; then
+        printf "${YELLOW}tmux already installed.${NC}\n"
+        SUMMARY_TMUX_STATUS="Already installed"
+        return
+    fi
+
+    pkg_install tmux
+
+    if command -v tmux > /dev/null 2>&1; then
+        if [ "$OS" = "alpine" ]; then
+            SUMMARY_TMUX_STATUS="Installed (Alpine package)"
+        else
+            SUMMARY_TMUX_STATUS="Installed"
+        fi
+        printf "${GREEN}tmux installed.${NC}\n"
+    else
+        SUMMARY_TMUX_STATUS="FAILED to install"
+        printf "${RED}tmux installation failed.${NC}\n"
+    fi
+}
+
+install_mosh() {
+    print_step "Install Mosh"
+
+    if command -v mosh-server > /dev/null 2>&1; then
+        printf "${YELLOW}mosh already installed. Continuing with firewall configuration.${NC}\n"
+    else
+        pkg_install mosh
+        if ! command -v mosh-server > /dev/null 2>&1; then
+            SUMMARY_MOSH_STATUS="FAILED to install"
+            printf "${RED}mosh installation failed.${NC}\n"
+            return
+        fi
+        printf "${GREEN}mosh installed.${NC}\n"
+    fi
+
+    ssh_port=$(grep -E "^Port " /etc/ssh/sshd_config | awk '{print $2}' | head -n 1)
+    ssh_port="${ssh_port:-22}"
+    printf "mosh still uses SSH for login. Detected SSH port: %s\n" "$ssh_port"
+
+    printf "Enter mosh UDP start port [60000]: "
+    read -r mosh_start_port
+    mosh_start_port="${mosh_start_port:-60000}"
+    printf "Enter mosh UDP end port [61000]: "
+    read -r mosh_end_port
+    mosh_end_port="${mosh_end_port:-61000}"
+
+    case "$mosh_start_port:$mosh_end_port" in
+        *[!0-9:]*|:|*::*) printf "${RED}Invalid mosh port range.${NC}\n"; SUMMARY_MOSH_STATUS="Invalid port range"; return ;;
+    esac
+
+    if [ "$mosh_start_port" -lt 1 ] || [ "$mosh_start_port" -gt 65535 ] || \
+       [ "$mosh_end_port" -lt 1 ] || [ "$mosh_end_port" -gt 65535 ] || \
+       [ "$mosh_start_port" -gt "$mosh_end_port" ]; then
+        printf "${RED}mosh port range must be 1-65535 and start <= end.${NC}\n"
+        SUMMARY_MOSH_STATUS="Invalid port range"
+        return
+    fi
+
+    mosh_range="${mosh_start_port}:${mosh_end_port}"
+    firewall_note="No firewall changes"
+
+    if [ "$OS" = "alpine" ]; then
+        if command -v iptables > /dev/null 2>&1 && iptables -L INPUT > /dev/null 2>&1; then
+            iptables -C INPUT -p udp --dport "$mosh_range" -j ACCEPT 2>/dev/null || \
+                iptables -A INPUT -p udp --dport "$mosh_range" -j ACCEPT
+            iptables-save > /etc/iptables/rules.v4
+            firewall_note="iptables opened UDP ${mosh_start_port}-${mosh_end_port}"
+            if [ "$SUMMARY_FIREWALL_PORTS" != "N/A" ]; then
+                SUMMARY_FIREWALL_PORTS="${SUMMARY_FIREWALL_PORTS}, UDP ${mosh_start_port}-${mosh_end_port} (mosh)"
+            fi
+        fi
+        SUMMARY_MOSH_STATUS="Installed (UDP ${mosh_start_port}-${mosh_end_port})"
+    else
+        if command -v ufw > /dev/null 2>&1 && ufw status 2>/dev/null | grep -q "^Status: active"; then
+            ufw allow "${mosh_start_port}:${mosh_end_port}/udp"
+            firewall_note="UFW opened UDP ${mosh_start_port}-${mosh_end_port}"
+            if [ "$SUMMARY_FIREWALL_PORTS" != "N/A" ]; then
+                SUMMARY_FIREWALL_PORTS="${SUMMARY_FIREWALL_PORTS}, UDP ${mosh_start_port}-${mosh_end_port} (mosh)"
+            fi
+        fi
+        SUMMARY_MOSH_STATUS="Installed (UDP ${mosh_start_port}-${mosh_end_port})"
+    fi
+
+    printf "${GREEN}mosh ready.${NC} %s\n" "$firewall_note"
+}
+
 install_frp() {
     print_step "Install FRPS"
 
@@ -659,6 +750,8 @@ display_summary() {
     printf "  Fail2Ban:\t\t%s\n"             "$SUMMARY_FAIL2BAN_STATUS"
     printf "  BBR:\t\t\t%s\n"               "$SUMMARY_BBR_STATUS"
     printf "  Docker:\t\t%s\n"              "$SUMMARY_DOCKER_STATUS"
+    printf "  tmux:\t\t\t%s\n"              "$SUMMARY_TMUX_STATUS"
+    printf "  mosh:\t\t\t%s\n"              "$SUMMARY_MOSH_STATUS"
     printf "  FRPS:\t\t\t%s\n"              "$SUMMARY_FRP_STATUS"
     printf "  OS:\t\t\t%s\n"               "$OS"
     printf "  Log:\t\t\t%s\n"              "$LOG_FILE"
@@ -703,6 +796,18 @@ main() {
         install_docker
     else
         SUMMARY_DOCKER_STATUS="Skipped by user"
+    fi
+
+    if prompt_yes_no "Install tmux?"; then
+        install_tmux
+    else
+        SUMMARY_TMUX_STATUS="Skipped by user"
+    fi
+
+    if prompt_yes_no "Install Mosh?"; then
+        install_mosh
+    else
+        SUMMARY_MOSH_STATUS="Skipped by user"
     fi
 
     if prompt_yes_no "Install FRPS?"; then

@@ -86,6 +86,8 @@ On Debian/Ubuntu, choosing the firewall step configures UFW directly, then asks 
   - BBR
   - Hostname & Timezone
   - Docker (official repo on Debian/Ubuntu; Alpine package on Alpine)
+  - tmux
+  - mosh (with optional default UDP range `60000-61000`)
   - FRPS (OpenRC service on Alpine; systemd on Debian/Ubuntu)
 
 In Guided Install, the Hostname/Timezone step opens directly and each field can be skipped independently.

@@ -55,6 +55,8 @@ curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_com
 - BBR
 - 主机名与时区
 - Docker（Debian/Ubuntu 使用官方源；Alpine 使用系统包）
+- tmux
+- mosh（可选放行默认 UDP 端口范围 `60000-61000`）
 - FRPS（Alpine 使用 OpenRC；Debian/Ubuntu 使用 systemd）
 
 Guided Install 模式下会直接进入“主机名与时区”子步骤，主机名和时区都可以分别跳过。
