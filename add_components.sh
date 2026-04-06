@@ -264,6 +264,139 @@ enable_bbr() {
     fi
 }
 
+recommend_network_tuning() {
+    mem_size_mb=$(free -m | awk '/^Mem:/{print $2}')
+
+    if [ -z "$mem_size_mb" ] || [ "$mem_size_mb" -lt 1024 ]; then
+        recommended_nofile=16384
+        recommended_somaxconn=1024
+        recommended_syn_backlog=2048
+        recommended_buffer_max=4194304
+        recommended_file_max=262144
+    elif [ "$mem_size_mb" -lt 2048 ]; then
+        recommended_nofile=32768
+        recommended_somaxconn=2048
+        recommended_syn_backlog=4096
+        recommended_buffer_max=8388608
+        recommended_file_max=524288
+    elif [ "$mem_size_mb" -lt 4096 ]; then
+        recommended_nofile=51200
+        recommended_somaxconn=4096
+        recommended_syn_backlog=4096
+        recommended_buffer_max=16777216
+        recommended_file_max=1048576
+    else
+        recommended_nofile=65535
+        recommended_somaxconn=4096
+        recommended_syn_backlog=8192
+        recommended_buffer_max=16777216
+        recommended_file_max=2097152
+    fi
+}
+
+apply_advanced_network_tuning() {
+    printf "\n${BLUE}--- Applying Advanced Network Tuning ---${NC}\n"
+    printf "${YELLOW}Recommended for proxy, FRP, relay, or other high-concurrency workloads.${NC}\n"
+    printf "${YELLOW}These settings are conservative defaults, not mandatory for every VPS.${NC}\n"
+
+    recommend_network_tuning
+    printf "Detected memory: %sMB\n" "${mem_size_mb:-unknown}"
+    printf "Recommended profile:\n"
+    printf "  somaxconn: %s\n" "$recommended_somaxconn"
+    printf "  tcp_max_syn_backlog: %s\n" "$recommended_syn_backlog"
+    printf "  rmem/wmem max: %s bytes\n" "$recommended_buffer_max"
+    printf "  fs.file-max: %s\n" "$recommended_file_max"
+    printf "  nofile: %s\n" "$recommended_nofile"
+
+    printf "Enter nofile limit [%s]: " "$recommended_nofile"; read -r nofile_limit
+    nofile_limit="${nofile_limit:-$recommended_nofile}"
+    case "$nofile_limit" in
+        ''|*[!0-9]*) printf "${RED}Invalid nofile limit.${NC}\n"; return 1 ;;
+    esac
+    if [ "$nofile_limit" -lt 1024 ]; then
+        printf "${RED}nofile limit must be at least 1024.${NC}\n"
+        return 1
+    fi
+
+    tfo_value=0
+    if prompt_yes_no "Enable TCP Fast Open (TFO)?"; then
+        tfo_value=3
+    fi
+
+    if [ "$OS" = "alpine" ]; then
+        sysctl_file="/etc/sysctl.conf"
+        touch "$sysctl_file"
+        cp -a "$sysctl_file" "${sysctl_file}.bak_$(date +%s)" 2>/dev/null || true
+        sed -i '/# --- linvpsliteinit advanced network tuning (start) ---/,/# --- linvpsliteinit advanced network tuning (end) ---/d' "$sysctl_file"
+        cat >> "$sysctl_file" << EOF
+# --- linvpsliteinit advanced network tuning (start) ---
+net.core.somaxconn=${recommended_somaxconn}
+net.ipv4.tcp_max_syn_backlog=${recommended_syn_backlog}
+net.core.rmem_max=${recommended_buffer_max}
+net.core.wmem_max=${recommended_buffer_max}
+net.ipv4.tcp_rmem=4096 87380 ${recommended_buffer_max}
+net.ipv4.tcp_wmem=4096 65536 ${recommended_buffer_max}
+net.ipv4.tcp_fastopen=${tfo_value}
+fs.file-max=${recommended_file_max}
+# --- linvpsliteinit advanced network tuning (end) ---
+EOF
+        sysctl -q -e -p "$sysctl_file" 2>/dev/null || true
+    else
+        sysctl_file="/etc/sysctl.d/99-advanced-network.conf"
+        cat > "$sysctl_file" << EOF
+# Managed by linvpsliteinit add_components.sh
+net.core.somaxconn=${recommended_somaxconn}
+net.ipv4.tcp_max_syn_backlog=${recommended_syn_backlog}
+net.core.rmem_max=${recommended_buffer_max}
+net.core.wmem_max=${recommended_buffer_max}
+net.ipv4.tcp_rmem=4096 87380 ${recommended_buffer_max}
+net.ipv4.tcp_wmem=4096 65536 ${recommended_buffer_max}
+net.ipv4.tcp_fastopen=${tfo_value}
+fs.file-max=${recommended_file_max}
+EOF
+        sysctl --system > /dev/null
+    fi
+
+    mkdir -p /etc/security/limits.d
+    cat > /etc/security/limits.d/99-linvpsliteinit-nofile.conf << EOF
+# Managed by linvpsliteinit add_components.sh
+* soft nofile ${nofile_limit}
+* hard nofile ${nofile_limit}
+root soft nofile ${nofile_limit}
+root hard nofile ${nofile_limit}
+EOF
+
+    mkdir -p /etc/profile.d
+    cat > /etc/profile.d/99-linvpsliteinit-nofile.sh << EOF
+# Managed by linvpsliteinit add_components.sh
+ulimit -n ${nofile_limit} >/dev/null 2>&1 || true
+EOF
+
+    if [ -f /etc/systemd/system/frps.service ]; then
+        if grep -q "^LimitNOFILE=" /etc/systemd/system/frps.service; then
+            sed -i "s/^LimitNOFILE=.*/LimitNOFILE=${nofile_limit}/" /etc/systemd/system/frps.service
+        else
+            sed -i "/^Restart=always$/a LimitNOFILE=${nofile_limit}" /etc/systemd/system/frps.service
+        fi
+        systemctl daemon-reload
+        if systemctl is-active --quiet frps; then
+            systemctl restart frps
+            printf "Updated frps.service with LimitNOFILE=%s and restarted FRPS.\n" "$nofile_limit"
+        else
+            printf "Updated frps.service with LimitNOFILE=%s.\n" "$nofile_limit"
+        fi
+    fi
+
+    printf "${GREEN}Advanced network tuning applied.${NC}\n"
+    printf "  somaxconn: %s\n" "$recommended_somaxconn"
+    printf "  tcp_max_syn_backlog: %s\n" "$recommended_syn_backlog"
+    printf "  rmem/wmem max: %s bytes\n" "$recommended_buffer_max"
+    printf "  fs.file-max: %s\n" "$recommended_file_max"
+    printf "  tcp_fastopen: %s\n" "$tfo_value"
+    printf "  nofile: %s\n" "$nofile_limit"
+    printf "${YELLOW}Log out and reconnect for shell nofile limits to fully apply.${NC}\n"
+}
+
 set_hostname_timezone() {
     printf "\n${BLUE}--- Setting Hostname & Timezone ---${NC}\n"
     printf "Enter new hostname (or press Enter to skip): "; read -r h
@@ -502,6 +635,7 @@ Type=simple
 User=root
 ExecStart=${dir}/frps -c ${dir}/frps.toml
 Restart=always
+LimitNOFILE=51200
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -541,6 +675,7 @@ main() {
         printf " 6) Install tmux\n"
         printf " 7) Install mosh\n"
         printf " 8) Install FRPS\n"
+        printf " 9) Advanced Network Tuning\n"
         printf -- "-------------------------------------------\n"
         printf " 99) Guided Install (all components)\n"
         printf " 0) Exit\n"
@@ -556,6 +691,7 @@ main() {
             6) install_tmux ;;
             7) install_mosh ;;
             8) install_frp ;;
+            9) apply_advanced_network_tuning ;;
             99)
                 printf "${YELLOW}\nStarting Guided Installation...${NC}\n"
                 prompt_yes_no "Configure SWAP?"       && configure_swap
@@ -566,6 +702,7 @@ main() {
                 prompt_yes_no "Install tmux?"         && install_tmux
                 prompt_yes_no "Install mosh?"         && install_mosh
                 prompt_yes_no "Install FRPS?"         && install_frp
+                prompt_yes_no "Apply advanced network tuning?" && apply_advanced_network_tuning
                 printf "${GREEN}\nGuided Installation finished.${NC}\n"
                 ;;
             0) printf "Exiting.\n"; break ;;

@@ -53,6 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_com
 - SWAP 配置
 - 防火墙（UFW + Fail2Ban / iptables）
 - BBR
+- 高级网络调优（适用于代理 / FRP / 高并发场景）
 - 主机名与时区
 - Docker（Debian/Ubuntu 使用官方源；Alpine 使用系统包）
 - tmux
@@ -60,6 +61,8 @@ curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_com
 - FRPS（Alpine 使用 OpenRC；Debian/Ubuntu 使用 systemd）
 
 Guided Install 模式下会直接进入“主机名与时区”子步骤，主机名和时区都可以分别跳过。
+`高级网络调优` 为可选项，会应用较保守的 `somaxconn`、`tcp_max_syn_backlog`、
+`rmem/wmem`、`nofile` 以及可选的 `TCP Fast Open` 设置。
 
 ---
 

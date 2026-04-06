@@ -84,6 +84,7 @@ On Debian/Ubuntu, choosing the firewall step configures UFW directly, then asks 
   - SWAP reconfiguration
   - Firewall (UFW + Fail2Ban / iptables)
   - BBR
+  - Advanced Network Tuning for proxy/FRP/high-concurrency workloads
   - Hostname & Timezone
   - Docker (official repo on Debian/Ubuntu; Alpine package on Alpine)
   - tmux
@@ -91,6 +92,8 @@ On Debian/Ubuntu, choosing the firewall step configures UFW directly, then asks 
   - FRPS (OpenRC service on Alpine; systemd on Debian/Ubuntu)
 
 In Guided Install, the Hostname/Timezone step opens directly and each field can be skipped independently.
+`Advanced Network Tuning` is optional and applies conservative settings such as `somaxconn`,
+`tcp_max_syn_backlog`, `rmem/wmem`, `nofile`, and optional `TCP Fast Open`.
 
 ---
 

@@ -758,6 +758,8 @@ display_summary() {
     printf -- "----------------------------------------------------\n"
     printf "\n${RED}IMPORTANT: Use SSH port ${GREEN}%s${NC}${RED} with your saved private key to reconnect.${NC}\n" \
         "$SUMMARY_SSH_PORT"
+    printf "${BLUE}TIP:${NC} For proxy, FRP, relay, or other high-concurrency workloads,\n"
+    printf "     run ${YELLOW}./add_components.sh${NC} and choose ${YELLOW}Advanced Network Tuning${NC}.\n"
     if [ "$SUMMARY_FIREWALL_STATUS" = "Skipped" ]; then
         printf "${YELLOW}WARNING: Firewall was skipped. Configure it immediately.${NC}\n"
     fi
