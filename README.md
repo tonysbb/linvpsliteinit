@@ -19,7 +19,8 @@ It ships a one-pass initialization script and a re-runnable components installer
 ## ✨ Features at a Glance
 - **Init once, skip freely**: hostname, timezone, firewall, Fail2Ban, SWAP, BBR
 - **Add later, safely**: re-run the components installer any time
-- **Smart SWAP**: sensible defaults; Debian 11 de-dup; Debian 12 untouched
+- **Memory choices**: disk SWAP, optional ZRAM, or both; component mode preserves existing swap
+- **Time synchronization**: optional Chrony client with conflict detection
 - **Secure baseline**: deny inbound by default, allow chosen SSH port; Fail2Ban on Debian/Ubuntu
 - **Alpine support**: iptables firewall, OpenRC services, POSIX sh — no bash required
 - **Global-ready**: clear English comments; tested on Debian 11/12, Ubuntu LTS, Alpine 3.22+
@@ -73,6 +74,8 @@ sudo ./add_components.sh
 ### 1) Initialization — `vps_init.sh`
 - Hostname & Timezone (RFC 1123 compliant)
 - SWAP: dynamic sizing, deduplication for Debian 11
+- ZRAM: optional single compressed swap device with capability checks
+- Chrony: optional NTP client
 - Firewall: UFW + Fail2Ban on Debian/Ubuntu; iptables on Alpine
 - BBR: enabled if supported by kernel
 
@@ -82,6 +85,8 @@ On Debian/Ubuntu, choosing the firewall step configures UFW directly, then asks 
 ### 2) Components — `add_components.sh`
 - Re-runnable menu installer:
   - SWAP reconfiguration
+  - ZRAM swap
+  - Chrony
   - Firewall (UFW + Fail2Ban / iptables)
   - BBR
   - Advanced Network Tuning for proxy/FRP/high-concurrency workloads
@@ -94,6 +99,11 @@ On Debian/Ubuntu, choosing the firewall step configures UFW directly, then asks 
 In Guided Install, the Hostname/Timezone step opens directly and each field can be skipped independently.
 `Advanced Network Tuning` is optional and applies conservative settings such as `somaxconn`,
 `tcp_max_syn_backlog`, `rmem/wmem`, `nofile`, and optional `TCP Fast Open`.
+
+`vps_init.sh` targets a clean, newly installed system. `add_components.sh` targets systems that
+already have initialization or business workloads and changes only the selected component.
+ZRAM is compressed RAM swap, not additional physical memory. Chrony is configured as an NTP client
+only; no inbound UDP/123 service is enabled.
 
 ---
 

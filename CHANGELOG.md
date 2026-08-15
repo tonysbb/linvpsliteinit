@@ -2,6 +2,11 @@
 
 All commit summaries recorded by deploy.sh.
 
+## [Unreleased]
+
+- Add minimal capability-checked ZRAM and optional Chrony integration.
+- Preserve existing swap and avoid logging the generated SSH private key.
+
 ## [2026-03-30 00:32:00]
 
 ```text

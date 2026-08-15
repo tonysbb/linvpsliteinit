@@ -15,8 +15,10 @@
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 
 LOG_FILE="/root/components_manager_$(date +%Y%m%d_%H%M%S).log"
+prepare_log_file() { (umask 077; : > "$LOG_FILE"); chmod 600 "$LOG_FILE"; }
 
 start_logging() {
+    prepare_log_file
     exec 3>&1 4>&2
 
     if ! command -v mkfifo > /dev/null 2>&1; then
@@ -80,6 +82,13 @@ prompt_yes_no() {
     case "${choice:-Y}" in [Yy]*) return 0;; *) return 1;; esac
 }
 
+is_container() { [ -f /.dockerenv ] || [ -f /run/systemd/container ] || grep -qaE '(^|/)(docker|lxc|kubepods|containerd)(/|$)' /proc/1/cgroup 2>/dev/null; }
+active_time_service() { for s in chrony chronyd ntp ntpd ntpsec openntpd systemd-timesyncd; do svc_is_active "$s" 2>/dev/null && { printf '%s\n' "$s"; return; }; done; return 1; }
+zram_active() { awk 'NR>1 && $1 ~ /zram/ {ok=1} END {exit !ok}' /proc/swaps 2>/dev/null; }
+zram_capable() { is_container && return 1; [ -d /sys/module/zram ] || { command -v modprobe >/dev/null 2>&1 && modprobe -n zram >/dev/null 2>&1; }; }
+chrony_rollback() { if [ "$OS" = "alpine" ]; then rc-service chronyd stop 2>/dev/null || true; rc-update del chronyd default 2>/dev/null || true; else systemctl disable --now chrony 2>/dev/null || true; fi; [ "${timesyncd_disabled:-0}" -eq 1 ] && systemctl enable --now systemd-timesyncd 2>/dev/null || true; }
+zram_rollback() { if [ "$OS" = "alpine" ]; then rc-service zram-init stop 2>/dev/null || true; rc-update del zram-init default 2>/dev/null || true; else systemctl disable --now zramswap 2>/dev/null || true; fi; [ -f "$zram_backup" ] && cp -a "$zram_backup" "$zram_config" || rm -f "$zram_config"; }
+
 # =============================================================================
 # COMPONENT FUNCTIONS
 # =============================================================================
@@ -118,12 +127,11 @@ configure_swap() {
     fi
 
     if [ -f "$swap_file_path" ]; then
-        swapoff "$swap_file_path" 2>/dev/null || true
-        rm -f "$swap_file_path"
-        cp -a /etc/fstab "/etc/fstab.bak_$(date +%s)"
-        sed -i '/swapfile_by_script/! s|^\([^#].*[[:space:]]\)swap\([[:space:]].*\)$|# \1swap\2|' /etc/fstab
-        sed -i "\#${swap_file_path}#d" /etc/fstab
+        printf "${YELLOW}Existing managed swap file found; leaving it unchanged.${NC}\n"
+        return 0
     fi
+    fstab_backup="/etc/fstab.bak_$(date +%s)"
+    cp -a /etc/fstab "$fstab_backup" || return 1
 
     printf "Creating %sMB swap file...\n" "$target_swap_mb"
 
@@ -138,7 +146,12 @@ configure_swap() {
         dd if=/dev/zero of="$swap_file_path" bs=1M count="$target_swap_mb" status=progress
     fi
 
-    chmod 600 "$swap_file_path" && mkswap "$swap_file_path" && swapon "$swap_file_path"
+    if ! chmod 600 "$swap_file_path" || ! mkswap "$swap_file_path" > /dev/null 2>&1 || ! swapon "$swap_file_path"; then
+        rm -f "$swap_file_path"
+        cp -a "$fstab_backup" /etc/fstab
+        printf "${RED}SWAP activation failed; previous fstab restored.${NC}\n"
+        return 1
+    fi
 
     if ! grep -qF "$swap_file_path" /etc/fstab; then
         printf "%s none swap sw 0 0\n" "$swap_file_path" >> /etc/fstab
@@ -150,6 +163,42 @@ configure_swap() {
 
     printf "${GREEN}SWAP configured successfully.${NC}\n"
     free -h
+}
+
+install_chrony() {
+    printf "\n${BLUE}--- Install Chrony ---${NC}\n"
+    if is_container; then printf "${YELLOW}Container detected; skipping.${NC}\n"; return 0; fi
+    current_time_service=$(active_time_service || true)
+    timesyncd_disabled=0
+    case "$current_time_service" in
+        chrony|chronyd) printf "${GREEN}Chrony already active; no restart.${NC}\n"; return 0 ;;
+        ntp|ntpd|ntpsec|openntpd) printf "${RED}NTP conflict: %s${NC}\n" "$current_time_service"; return 1 ;;
+        systemd-timesyncd) prompt_yes_no "Replace systemd-timesyncd with chrony?" || return 0; systemctl disable --now systemd-timesyncd || return 1; timesyncd_disabled=1 ;;
+    esac
+    if [ "$OS" = "alpine" ]; then apk add --no-cache chrony && rc-update add chronyd default && rc-service chronyd start || { chrony_rollback; return 1; }; chrony_service=chronyd
+    else apt-get update > /dev/null && apt-get install -y chrony && systemctl enable --now chrony || { chrony_rollback; return 1; }; chrony_service=chrony
+    fi
+    svc_is_active "$chrony_service" || { chrony_rollback; return 1; }
+}
+
+configure_zram() {
+    printf "\n${BLUE}--- Configure ZRAM ---${NC}\n"
+    if is_container || zram_active || { [ -r /sys/module/zswap/parameters/enabled ] && [ "$(cat /sys/module/zswap/parameters/enabled)" = Y ]; } || ! zram_capable; then printf "${YELLOW}ZRAM skipped: existing, conflicting, or unsupported environment.${NC}\n"; return 0; fi
+    printf "ZRAM allocation percentage [50]: "; read -r zram_percent; zram_percent="${zram_percent:-50}"
+    case "$zram_percent" in ''|*[!0-9]*) return 1;; esac; [ "$zram_percent" -ge 10 ] && [ "$zram_percent" -le 100 ] || return 1
+    if [ "$OS" = "alpine" ]; then
+        apk add --no-cache zram-init || return 1
+        zram_config=/etc/conf.d/zram-init; zram_backup="${zram_config}.bak_$(date +%s)"; [ -f "$zram_config" ] && cp -a "$zram_config" "$zram_backup"
+        mem_size_mb=$(free -m | awk '/^Mem:/{print $2}'); zram_size_mb=$((mem_size_mb * zram_percent / 100)); [ "$zram_size_mb" -ge 16 ] || zram_size_mb=16
+        printf 'load_on_start=yes\nunload_on_stop=no\nnum_devices=1\ntype0=swap\nflag0=100\nsize0=%s\nlabl0=zram_swap\n' "$zram_size_mb" > "$zram_config"
+        rc-update add zram-init default && rc-service zram-init start || { rc-update del zram-init default 2>/dev/null || true; [ -f "$zram_backup" ] && cp -a "$zram_backup" "$zram_config" || rm -f "$zram_config"; return 1; }; zram_service=zram-init
+    else
+        apt-get update > /dev/null && apt-get install -y zram-tools || return 1
+        zram_config=/etc/default/zramswap; zram_backup="${zram_config}.bak_$(date +%s)"; [ -f "$zram_config" ] && cp -a "$zram_config" "$zram_backup"
+        printf '# Managed by linvpsliteinit.\nPERCENT=%s\nPRIORITY=100\n' "$zram_percent" > "$zram_config"; zram_service=zramswap
+        systemctl enable "$zram_service" && systemctl restart "$zram_service" || { systemctl disable --now "$zram_service" 2>/dev/null || true; [ -f "$zram_backup" ] && cp -a "$zram_backup" "$zram_config" || rm -f "$zram_config"; return 1; }
+    fi
+    svc_is_active "$zram_service" && zram_active || { zram_rollback; printf "${RED}ZRAM failed.${NC}\n"; return 1; }
 }
 
 setup_security_tools() {
@@ -667,15 +716,17 @@ main() {
         printf "\n${BLUE}VPS Component Manager${NC}\n"
         printf "OS: %s\n" "$OS"
         printf -- "-------------------------------------------\n"
-        printf " 1) Configure SWAP\n"
-        printf " 2) Setup Security (Firewall + Fail2ban)\n"
-        printf " 3) Enable BBR\n"
-        printf " 4) Set Hostname & Timezone\n"
-        printf " 5) Install Docker\n"
-        printf " 6) Install tmux\n"
-        printf " 7) Install mosh\n"
-        printf " 8) Install FRPS\n"
-        printf " 9) Advanced Network Tuning\n"
+        printf " 1) Configure disk SWAP\n"
+        printf " 2) Configure ZRAM\n"
+        printf " 3) Install Chrony\n"
+        printf " 4) Setup Security (Firewall + Fail2ban)\n"
+        printf " 5) Enable BBR\n"
+        printf " 6) Set Hostname & Timezone\n"
+        printf " 7) Install Docker\n"
+        printf " 8) Install tmux\n"
+        printf " 9) Install mosh\n"
+        printf " 10) Install FRPS\n"
+        printf " 11) Advanced Network Tuning\n"
         printf -- "-------------------------------------------\n"
         printf " 99) Guided Install (all components)\n"
         printf " 0) Exit\n"
@@ -684,17 +735,21 @@ main() {
 
         case "$choice" in
             1) configure_swap ;;
-            2) setup_security_tools ;;
-            3) enable_bbr ;;
-            4) set_hostname_timezone ;;
-            5) install_docker ;;
-            6) install_tmux ;;
-            7) install_mosh ;;
-            8) install_frp ;;
-            9) apply_advanced_network_tuning ;;
+            2) configure_zram ;;
+            3) install_chrony ;;
+            4) setup_security_tools ;;
+            5) enable_bbr ;;
+            6) set_hostname_timezone ;;
+            7) install_docker ;;
+            8) install_tmux ;;
+            9) install_mosh ;;
+            10) install_frp ;;
+            11) apply_advanced_network_tuning ;;
             99)
                 printf "${YELLOW}\nStarting Guided Installation...${NC}\n"
                 prompt_yes_no "Configure SWAP?"       && configure_swap
+                prompt_yes_no "Configure ZRAM?"        && configure_zram
+                prompt_yes_no "Install Chrony?"        && install_chrony
                 prompt_yes_no "Setup Security?"       && setup_security_tools
                 prompt_yes_no "Enable BBR?"           && enable_bbr
                 set_hostname_timezone

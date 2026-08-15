@@ -10,7 +10,8 @@
 ## ✨ 特徴
 - **一度の初期化、自由にスキップ**：ホスト名、タイムゾーン、ファイアウォール、Fail2Ban、SWAP、BBR
 - **後からコンポーネントを安全に追加**：何度でも再実行可能
-- **スマート SWAP**：適切なデフォルト値；Debian 11 では重複マウントを回避
+- **メモリ設定**：ディスク SWAP と任意の ZRAM；既存 swap を保護
+- **時刻同期**：任意の Chrony クライアント
 - **セキュリティ基盤**：インバウンド拒否・アウトバウンド許可がデフォルト；SSH ポートのみ開放
 - **Alpine 対応**：iptables ファイアウォール、OpenRC サービス管理、bash 不要（POSIX sh）
 - **動作確認済み**：Debian 11/12、Ubuntu LTS、Alpine 3.22+
@@ -41,6 +42,8 @@ curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_com
 ### 1) 初期化スクリプト `vps_init.sh`
 - ホスト名・タイムゾーン設定（RFC 1123 準拠）
 - SWAP：動的サイジング、Debian 11 の重複回避
+- ZRAM：能力確認付きの任意の圧縮 swap
+- Chrony：任意の NTP クライアント
 - ファイアウォール：Debian/Ubuntu は UFW + Fail2Ban；Alpine は iptables
 - BBR：カーネルが対応している場合に有効化
 
@@ -50,6 +53,8 @@ Debian/Ubuntu では、ファイアウォール手順を選ぶと UFW をその�
 ### 2) コンポーネントスクリプト `add_components.sh`
 再実行可能なメニュー形式のインストーラー：
 - SWAP 設定
+- ZRAM 設定
+- Chrony インストール
 - ファイアウォール（UFW + Fail2Ban / iptables）
 - BBR
 - 高度なネットワークチューニング（proxy / FRP / 高負荷向け）
@@ -63,6 +68,8 @@ Guided Install では「ホスト名・タイムゾーン」手順に直接入�
 `高度なネットワークチューニング` は任意機能で、保守的な `somaxconn`、
 `tcp_max_syn_backlog`、`rmem/wmem`、`nofile`、および任意の `TCP Fast Open`
 設定を適用します。
+
+`vps_init.sh` は新規インストール直後のクリーンなシステム向けです。`add_components.sh` は初期化済み、または業務を提供中のシステム向けで、選択したコンポーネント以外の設定を変更しません。ZRAM は圧縮 RAM swap であり、物理メモリを増やすものではありません。Chrony は NTP クライアントとしてのみ使用します。
 
 ---
 

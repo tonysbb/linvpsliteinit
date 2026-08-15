@@ -21,8 +21,10 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; NC
 # individually with explicit checks.
 
 LOG_FILE="/root/vps_init_$(date +%Y%m%d_%H%M%S).log"
+prepare_log_file() { (umask 077; : > "$LOG_FILE"); chmod 600 "$LOG_FILE"; }
 
 start_logging() {
+    prepare_log_file
     exec 3>&1 4>&2
 
     if ! command -v mkfifo > /dev/null 2>&1; then
@@ -103,6 +105,8 @@ SUMMARY_SSH_PORT=""
 SUMMARY_HOSTNAME="$(hostname)"
 SUMMARY_TIMEZONE="Default"
 SUMMARY_SWAP_STATUS="Skipped"
+SUMMARY_ZRAM_STATUS="Skipped"
+SUMMARY_CHRONY_STATUS="Skipped"
 SUMMARY_FIREWALL_STATUS="Skipped"
 SUMMARY_FIREWALL_PORTS="N/A"
 SUMMARY_FAIL2BAN_STATUS="Skipped"
@@ -134,6 +138,13 @@ prompt_yes_no() {
         *)     return 1 ;;
     esac
 }
+
+is_container() { [ -f /.dockerenv ] || [ -f /run/systemd/container ] || grep -qaE '(^|/)(docker|lxc|kubepods|containerd)(/|$)' /proc/1/cgroup 2>/dev/null; }
+active_time_service() { for s in chrony chronyd ntp ntpd ntpsec openntpd systemd-timesyncd; do svc_is_active "$s" 2>/dev/null && { printf '%s\n' "$s"; return; }; done; return 1; }
+zram_active() { awk 'NR>1 && $1 ~ /zram/ {ok=1} END {exit !ok}' /proc/swaps 2>/dev/null; }
+zram_capable() { is_container && return 1; [ -d /sys/module/zram ] || { command -v modprobe >/dev/null 2>&1 && modprobe -n zram >/dev/null 2>&1; }; }
+chrony_rollback() { if [ "$OS" = "alpine" ]; then rc-service chronyd stop 2>/dev/null || true; rc-update del chronyd default 2>/dev/null || true; else systemctl disable --now chrony 2>/dev/null || true; fi; [ "${timesyncd_disabled:-0}" -eq 1 ] && systemctl enable --now systemd-timesyncd 2>/dev/null || true; }
+zram_rollback() { if [ "$OS" = "alpine" ]; then rc-service zram-init stop 2>/dev/null || true; rc-update del zram-init default 2>/dev/null || true; else systemctl disable --now zramswap 2>/dev/null || true; fi; [ -f "$zram_backup" ] && cp -a "$zram_backup" "$zram_config" || rm -f "$zram_config"; }
 
 # =============================================================================
 # CORE FUNCTIONS
@@ -171,10 +182,10 @@ configure_ssh() {
     cat ~/.ssh/id_ed25519.pub > ~/.ssh/authorized_keys
     chmod 600 ~/.ssh/authorized_keys
 
-    printf "\n${YELLOW}!!! IMPORTANT: Copy and save the private key below. !!!${NC}\n"
-    printf "${RED}--- PRIVATE KEY START ---${NC}\n"
-    cat ~/.ssh/id_ed25519
-    printf "${RED}---  PRIVATE KEY END  ---${NC}\n"
+    printf "\n${YELLOW}!!! IMPORTANT: Copy and save the private key below. !!!${NC}\n" >&3
+    printf "${RED}--- PRIVATE KEY START ---${NC}\n" >&3
+    cat ~/.ssh/id_ed25519 >&3
+    printf "${RED}---  PRIVATE KEY END  ---${NC}\n" >&3
 
     while true; do
         printf "Have you saved the private key? (yes/no): "
@@ -241,6 +252,50 @@ update_and_install_tools() {
     printf "${GREEN}System updated and tools installed.${NC}\n"
 }
 
+install_chrony() {
+    print_step "Configure Chrony"
+    if is_container; then SUMMARY_CHRONY_STATUS="Skipped: container"; return 0; fi
+    current_time_service=$(active_time_service || true)
+    timesyncd_disabled=0
+    case "$current_time_service" in
+        chrony|chronyd) SUMMARY_CHRONY_STATUS="Already active"; return 0 ;;
+        ntp|ntpd|ntpsec|openntpd) SUMMARY_CHRONY_STATUS="Conflict: $current_time_service"; return 1 ;;
+        systemd-timesyncd)
+            prompt_yes_no "Replace systemd-timesyncd with chrony?" || { SUMMARY_CHRONY_STATUS="Kept systemd-timesyncd"; return 0; }
+            systemctl disable --now systemd-timesyncd || return 1
+            timesyncd_disabled=1 ;;
+    esac
+    if [ "$OS" = "alpine" ]; then apk add --no-cache chrony && rc-update add chronyd default && rc-service chronyd start || { chrony_rollback; return 1; }; chrony_service=chronyd
+    else apt-get install -y chrony && systemctl enable --now chrony || { chrony_rollback; return 1; }; chrony_service=chrony
+    fi
+    svc_is_active "$chrony_service" || { chrony_rollback; SUMMARY_CHRONY_STATUS="Chrony failed"; return 1; }
+    SUMMARY_CHRONY_STATUS="Enabled; sync pending or complete"
+}
+
+configure_zram() {
+    print_step "Configure ZRAM"
+    if is_container || zram_active || { [ -r /sys/module/zswap/parameters/enabled ] && [ "$(cat /sys/module/zswap/parameters/enabled)" = Y ]; } || ! zram_capable; then
+        SUMMARY_ZRAM_STATUS="Skipped: existing, conflicting, or unsupported environment"
+        return 0
+    fi
+    printf "ZRAM allocation percentage [50]: "; read -r zram_percent; zram_percent="${zram_percent:-50}"
+    case "$zram_percent" in ''|*[!0-9]*) return 1;; esac
+    [ "$zram_percent" -ge 10 ] && [ "$zram_percent" -le 100 ] || return 1
+    if [ "$OS" = "alpine" ]; then
+        apk add --no-cache zram-init || return 1
+        zram_config=/etc/conf.d/zram-init; zram_backup="${zram_config}.bak_$(date +%s)"; [ -f "$zram_config" ] && cp -a "$zram_config" "$zram_backup"
+        mem_size_mb=$(free -m | awk '/^Mem:/{print $2}'); zram_size_mb=$((mem_size_mb * zram_percent / 100)); [ "$zram_size_mb" -ge 16 ] || zram_size_mb=16
+        printf 'load_on_start=yes\nunload_on_stop=no\nnum_devices=1\ntype0=swap\nflag0=100\nsize0=%s\nlabl0=zram_swap\n' "$zram_size_mb" > "$zram_config"
+        rc-update add zram-init default && rc-service zram-init start || { rc-update del zram-init default 2>/dev/null || true; [ -f "$zram_backup" ] && cp -a "$zram_backup" "$zram_config" || rm -f "$zram_config"; return 1; }; zram_service=zram-init
+    else
+        apt-get install -y zram-tools || return 1
+        zram_config=/etc/default/zramswap; zram_backup="${zram_config}.bak_$(date +%s)"; [ -f "$zram_config" ] && cp -a "$zram_config" "$zram_backup"
+        printf '# Managed by linvpsliteinit.\nPERCENT=%s\nPRIORITY=100\n' "$zram_percent" > "$zram_config"; zram_service=zramswap
+        systemctl enable "$zram_service" && systemctl restart "$zram_service" || { systemctl disable --now "$zram_service" 2>/dev/null || true; [ -f "$zram_backup" ] && cp -a "$zram_backup" "$zram_config" || rm -f "$zram_config"; return 1; }
+    fi
+    if svc_is_active "$zram_service" && zram_active; then SUMMARY_ZRAM_STATUS="Enabled"; else zram_rollback; SUMMARY_ZRAM_STATUS="ZRAM failed"; return 1; fi
+}
+
 configure_swap() {
     print_step "Configure SWAP File"
 
@@ -282,15 +337,14 @@ configure_swap() {
         return
     fi
 
-    # Clean up existing swapfile if present
+    # Never resize a live swap file in place; preserve existing workload state.
     if [ -f "$swap_file_path" ]; then
-        swapoff "$swap_file_path" 2>/dev/null || true
-        rm -f "$swap_file_path"
-        cp -a /etc/fstab "/etc/fstab.bak_$(date +%s)"
-        # Comment out other swap entries (keep only ours)
-        sed -i '/swapfile_by_script/! s|^\([^#].*[[:space:]]\)swap\([[:space:]].*\)$|# \1swap\2|' /etc/fstab
-        sed -i "\#${swap_file_path}#d" /etc/fstab
+        SUMMARY_SWAP_STATUS="Existing managed swap preserved"
+        printf "${YELLOW}Existing managed swap file found; leaving it unchanged.${NC}\n"
+        return 0
     fi
+    fstab_backup="/etc/fstab.bak_$(date +%s)"
+    cp -a /etc/fstab "$fstab_backup" || return 1
 
     printf "Creating %sMB swap file...\n" "$target_swap_mb"
 
@@ -307,9 +361,12 @@ configure_swap() {
         dd if=/dev/zero of="$swap_file_path" bs=1M count="$target_swap_mb" status=progress
     fi
 
-    chmod 600 "$swap_file_path"
-    mkswap "$swap_file_path"
-    swapon "$swap_file_path"
+    if ! chmod 600 "$swap_file_path" || ! mkswap "$swap_file_path" > /dev/null 2>&1 || ! swapon "$swap_file_path"; then
+        rm -f "$swap_file_path"
+        cp -a "$fstab_backup" /etc/fstab
+        printf "${RED}SWAP activation failed; previous fstab restored.${NC}\n"
+        return 1
+    fi
 
     if ! grep -qF "$swap_file_path" /etc/fstab; then
         printf "%s none swap sw 0 0\n" "$swap_file_path" >> /etc/fstab
@@ -746,6 +803,8 @@ display_summary() {
     printf "  Timezone:\t\t%s\n"             "$SUMMARY_TIMEZONE"
     printf "  SSH Port:\t\t${GREEN}%s (Verified)${NC}\n" "$SUMMARY_SSH_PORT"
     printf "  SWAP Status:\t\t%s\n"          "$SUMMARY_SWAP_STATUS"
+    printf "  ZRAM Status:\t\t%s\n"          "$SUMMARY_ZRAM_STATUS"
+    printf "  Chrony:\t\t%s\n"              "$SUMMARY_CHRONY_STATUS"
     printf "  Firewall:\t\t%s (Open: %s)\n" "$SUMMARY_FIREWALL_STATUS" "$SUMMARY_FIREWALL_PORTS"
     printf "  Fail2Ban:\t\t%s\n"             "$SUMMARY_FAIL2BAN_STATUS"
     printf "  BBR:\t\t\t%s\n"               "$SUMMARY_BBR_STATUS"
@@ -776,11 +835,15 @@ main() {
     configure_ssh
     update_and_install_tools
 
+    if prompt_yes_no "Install and enable Chrony?"; then install_chrony; else SUMMARY_CHRONY_STATUS="Skipped by user"; fi
+
     if prompt_yes_no "Configure SWAP?"; then
         configure_swap
     else
         SUMMARY_SWAP_STATUS="Skipped by user"
     fi
+
+    if prompt_yes_no "Configure ZRAM?"; then configure_zram; else SUMMARY_ZRAM_STATUS="Skipped by user"; fi
 
     if prompt_yes_no "Configure Firewall?"; then
         setup_security_tools
