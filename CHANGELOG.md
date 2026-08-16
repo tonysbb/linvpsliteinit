@@ -6,6 +6,9 @@ All commit summaries recorded by deploy.sh.
 
 - Add minimal capability-checked ZRAM and optional Chrony integration.
 - Preserve existing swap and avoid logging the generated SSH private key.
+- Size ZRAM in 64–4096 MiB binary tiers, capped at half normalized RAM and 4 GiB.
+- Separate disk SWAP accounting and recommendations from ZRAM.
+- Add guarded removal for `/swapfile_by_script` and linvpsliteinit-managed ZRAM.
 
 ## [2026-03-30 00:32:00]
 

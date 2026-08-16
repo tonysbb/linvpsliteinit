@@ -19,7 +19,7 @@ It ships a one-pass initialization script and a re-runnable components installer
 ## ✨ Features at a Glance
 - **Init once, skip freely**: hostname, timezone, firewall, Fail2Ban, SWAP, BBR
 - **Add later, safely**: re-run the components installer any time
-- **Memory choices**: disk SWAP, optional ZRAM, or both; component mode preserves existing swap
+- **Memory choices**: disk SWAP and ZRAM are sized and reported separately; existing swap is preserved
 - **Time synchronization**: optional Chrony client with conflict detection
 - **Secure baseline**: deny inbound by default, allow chosen SSH port; Fail2Ban on Debian/Ubuntu
 - **Alpine support**: iptables firewall, OpenRC services, POSIX sh — no bash required
@@ -73,8 +73,8 @@ sudo ./add_components.sh
 
 ### 1) Initialization — `vps_init.sh`
 - Hostname & Timezone (RFC 1123 compliant)
-- SWAP: dynamic sizing, deduplication for Debian 11
-- ZRAM: optional single compressed swap device with capability checks
+- Disk SWAP: workload-aware baseline sizing; ZRAM is excluded from disk-swap totals
+- ZRAM: RAM/2 rounded down to 64–4096 MiB binary tiers, with capability and zswap checks
 - Chrony: optional NTP client
 - Firewall: UFW + Fail2Ban on Debian/Ubuntu; iptables on Alpine
 - BBR: enabled if supported by kernel
@@ -84,8 +84,8 @@ On Debian/Ubuntu, choosing the firewall step configures UFW directly, then asks 
 
 ### 2) Components — `add_components.sh`
 - Re-runnable menu installer:
-  - SWAP reconfiguration
-  - ZRAM swap
+  - Managed disk SWAP configuration/removal
+  - Managed ZRAM configuration/removal
   - Chrony
   - Firewall (UFW + Fail2Ban / iptables)
   - BBR
@@ -102,8 +102,11 @@ In Guided Install, the Hostname/Timezone step opens directly and each field can 
 
 `vps_init.sh` targets a clean, newly installed system. `add_components.sh` targets systems that
 already have initialization or business workloads and changes only the selected component.
-ZRAM is compressed RAM swap, not additional physical memory. Chrony is configured as an NTP client
-only; no inbound UDP/123 service is enabled.
+ZRAM is compressed RAM swap, not additional physical memory. The default ZRAM size is half of
+normalized RAM, rounded down to `64/128/256/512/1024/2048/4096 MiB` and capped at 4 GiB. Disk SWAP
+uses a separate no-hibernation baseline and is never automatically reduced because ZRAM exists.
+Removal is limited to `/swapfile_by_script` and configurations marked as managed by linvpsliteinit.
+Chrony is configured as an NTP client only; no inbound UDP/123 service is enabled.
 
 ---
 

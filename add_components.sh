@@ -86,8 +86,131 @@ is_container() { [ -f /.dockerenv ] || [ -f /run/systemd/container ] || grep -qa
 active_time_service() { for s in chrony chronyd ntp ntpd ntpsec openntpd systemd-timesyncd; do svc_is_active "$s" 2>/dev/null && { printf '%s\n' "$s"; return; }; done; return 1; }
 zram_active() { awk 'NR>1 && $1 ~ /zram/ {ok=1} END {exit !ok}' /proc/swaps 2>/dev/null; }
 zram_capable() { is_container && return 1; [ -d /sys/module/zram ] || { command -v modprobe >/dev/null 2>&1 && modprobe -n zram >/dev/null 2>&1; }; }
+normalize_ram_mib() {
+    ram_kib=$1
+    ram_mib=$((ram_kib / 1024)); [ "$ram_mib" -ge 64 ] || ram_mib=64
+    next_power=64
+    while [ "$next_power" -lt "$ram_mib" ]; do next_power=$((next_power * 2)); done
+    [ $((ram_kib * 10)) -ge $((next_power * 1024 * 9)) ] && ram_mib=$next_power
+    printf '%s\n' "$ram_mib"
+}
+recommend_zram_mib() {
+    half=$(( $1 / 2 )); [ "$half" -gt 4096 ] && half=4096
+    zram_mib=64
+    for tier in 128 256 512 1024 2048 4096; do [ "$half" -ge "$tier" ] && zram_mib=$tier; done
+    printf '%s\n' "$zram_mib"
+}
+recommend_disk_swap_mib() {
+    if [ "$1" -lt 2048 ]; then printf '%s\n' $(( $1 * 2 ))
+    elif [ "$1" -lt 8192 ]; then printf '%s\n' "$1"
+    else printf '4096\n'; fi
+}
+active_zram_swap_mib() { awk 'NR>1 && $1 ~ /zram/ {sum += $3} END {printf "%d\n", (sum + 512) / 1024}' "${PROC_SWAPS_PATH:-/proc/swaps}"; }
+active_disk_swap_mib() { awk 'NR>1 && $1 !~ /zram/ {sum += $3} END {printf "%d\n", (sum + 512) / 1024}' "${PROC_SWAPS_PATH:-/proc/swaps}"; }
+active_zram_devices() { awk 'NR>1 && $1 ~ /zram/ {print $1}' /proc/swaps | sort; }
+managed_zram_config() { grep -qF 'Managed by linvpsliteinit' "$1" 2>/dev/null; }
+swapoff_has_headroom() {
+    used_kib=$1
+    ram_kib=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
+    available_kib=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
+    margin_kib=$((ram_kib / 10)); [ "$margin_kib" -ge 262144 ] || margin_kib=262144
+    [ "$available_kib" -ge $((used_kib + margin_kib)) ]
+}
+swap_used_kib() { awk -v dev="$1" 'NR>1 && $1 == dev {sum += $4} END {printf "%d\n", sum}' /proc/swaps; }
+remove_managed_swap() {
+    swap_file=/swapfile_by_script
+    [ -e "$swap_file" ] || { printf "${YELLOW}Managed disk SWAP does not exist.${NC}\n"; return 0; }
+    used_kib=$(swap_used_kib "$swap_file")
+    swapoff_has_headroom "$used_kib" || { printf "${RED}Not enough MemAvailable to disable managed disk SWAP safely.${NC}\n"; return 1; }
+    prompt_yes_no "Remove only $swap_file and its exact fstab entry?" || return 0
+    fstab_backup="/etc/fstab.bak_$(date +%s)"; fstab_tmp="/etc/fstab.linvpsliteinit.$$"
+    cp -a /etc/fstab "$fstab_backup" || return 1
+    was_active=0
+    if awk -v dev="$swap_file" 'NR>1 && $1 == dev {found=1} END {exit !found}' /proc/swaps; then
+        was_active=1
+        swapoff "$swap_file" || { printf "${RED}swapoff failed; configuration and file were preserved.${NC}\n"; return 1; }
+        awk -v dev="$swap_file" 'NR>1 && $1 == dev {found=1} END {exit !found}' /proc/swaps && { printf "${RED}Managed disk SWAP is still active; configuration and file were preserved.${NC}\n"; return 1; }
+    fi
+    if ! awk -v dev="$swap_file" '!($1 == dev && $3 == "swap")' /etc/fstab > "$fstab_tmp" || ! cat "$fstab_tmp" > /etc/fstab; then
+        cp -a "$fstab_backup" /etc/fstab; rm -f "$fstab_tmp"; [ "$was_active" -eq 0 ] || swapon -p 10 "$swap_file" 2>/dev/null || true
+        printf "${RED}fstab update failed; the backup was restored and the swap file was preserved.${NC}\n"; return 1
+    fi
+    rm -f "$fstab_tmp"
+    systemctl daemon-reload 2>/dev/null || true
+    if ! rm -f "$swap_file"; then
+        cp -a "$fstab_backup" /etc/fstab; [ "$was_active" -eq 0 ] || swapon -p 10 "$swap_file" 2>/dev/null || true
+        printf "${RED}Could not remove the managed swap file; fstab and active state were restored where possible.${NC}\n"; return 1
+    fi
+    printf "${GREEN}Managed disk SWAP removed.${NC}\n"
+}
+remove_managed_zram() {
+    if [ "$OS" = "alpine" ]; then zram_config=/etc/conf.d/zram-init; zram_service=zram-init
+    else zram_config=/etc/default/zramswap; zram_service=zramswap; fi
+    managed_zram_config "$zram_config" || { printf "${YELLOW}No linvpsliteinit-managed ZRAM configuration found; nothing was changed.${NC}\n"; return 0; }
+    used_kib=$(awk 'NR>1 && $1 ~ /zram/ {sum += $4} END {printf "%d\n", sum}' /proc/swaps)
+    swapoff_has_headroom "$used_kib" || { printf "${RED}Not enough available memory to stop ZRAM safely.${NC}\n"; return 1; }
+    prompt_yes_no "Remove only linvpsliteinit-managed ZRAM?" || return 0
+    zram_remove_was_active=0; svc_is_active "$zram_service" && zram_remove_was_active=1
+    if [ "$OS" = "alpine" ]; then
+        zram_remove_was_enabled=0; rc-update show default 2>/dev/null | grep -qw "$zram_service" && zram_remove_was_enabled=1
+    else
+        zram_remove_was_enabled=0; systemctl is-enabled --quiet "$zram_service" 2>/dev/null && zram_remove_was_enabled=1
+    fi
+    zram_before=$(active_zram_devices)
+    if [ "$OS" = "alpine" ]; then rc-service "$zram_service" stop || return 1
+    else systemctl stop "$zram_service" || return 1; fi
+    zram_after=$(active_zram_devices)
+    if [ "$zram_remove_was_active" -eq 1 ] && [ "$zram_before" = "$zram_after" ]; then
+        if [ "$OS" = "alpine" ]; then rc-service "$zram_service" start 2>/dev/null || true
+        else systemctl start "$zram_service" 2>/dev/null || true; fi
+        printf "${RED}Managed ZRAM did not leave /proc/swaps; service state was restored where possible.${NC}\n"; return 1
+    fi
+    if [ "$OS" = "alpine" ]; then
+        rc-update del "$zram_service" default 2>/dev/null || true
+        rc-update show default 2>/dev/null | grep -qw "$zram_service" && { [ "$zram_remove_was_active" -eq 0 ] || rc-service "$zram_service" start 2>/dev/null || true; printf "${RED}Could not disable ZRAM at boot; configuration was preserved.${NC}\n"; return 1; }
+    else
+        systemctl disable "$zram_service" 2>/dev/null || true
+        systemctl is-enabled --quiet "$zram_service" 2>/dev/null && { [ "$zram_remove_was_active" -eq 0 ] || systemctl start "$zram_service" 2>/dev/null || true; printf "${RED}Could not disable ZRAM at boot; configuration was preserved.${NC}\n"; return 1; }
+    fi
+    if ! rm -f "$zram_config"; then
+        if [ "$OS" = "alpine" ]; then
+            [ "$zram_remove_was_enabled" -eq 0 ] || rc-update add "$zram_service" default 2>/dev/null || true
+            [ "$zram_remove_was_active" -eq 0 ] || rc-service "$zram_service" start 2>/dev/null || true
+        else
+            [ "$zram_remove_was_enabled" -eq 0 ] || systemctl enable "$zram_service" 2>/dev/null || true
+            [ "$zram_remove_was_active" -eq 0 ] || systemctl start "$zram_service" 2>/dev/null || true
+        fi
+        printf "${RED}Could not remove the ZRAM configuration; service state was restored where possible.${NC}\n"; return 1
+    fi
+    printf "${GREEN}Managed ZRAM removed; its package was preserved.${NC}\n"
+}
 chrony_rollback() { if [ "$OS" = "alpine" ]; then rc-service chronyd stop 2>/dev/null || true; rc-update del chronyd default 2>/dev/null || true; else systemctl disable --now chrony 2>/dev/null || true; fi; [ "${timesyncd_disabled:-0}" -eq 1 ] && systemctl enable --now systemd-timesyncd 2>/dev/null || true; }
-zram_rollback() { if [ "$OS" = "alpine" ]; then rc-service zram-init stop 2>/dev/null || true; rc-update del zram-init default 2>/dev/null || true; else systemctl disable --now zramswap 2>/dev/null || true; fi; [ -f "$zram_backup" ] && cp -a "$zram_backup" "$zram_config" || rm -f "$zram_config"; }
+zram_rollback() {
+    if [ "$OS" = "alpine" ]; then rc-service zram-init stop 2>/dev/null || true; rc-update del zram-init default 2>/dev/null || true
+    else systemctl disable --now zramswap 2>/dev/null || true; fi
+    if [ -n "$zram_backup" ]; then
+        [ -f "$zram_backup" ] && cp -a "$zram_backup" "$zram_config" || return 1
+        cmp -s "$zram_backup" "$zram_config" || return 1
+    else
+        rm -f "$zram_config" || return 1
+        [ ! -e "$zram_config" ] || return 1
+    fi
+}
+restore_previous_zram() {
+    zram_rollback || return 1
+    if [ "$OS" = "alpine" ]; then
+        [ "$zram_was_enabled" -eq 0 ] || rc-update add zram-init default >/dev/null 2>&1 || return 1
+        [ "$zram_was_active" -eq 0 ] || rc-service zram-init start >/dev/null 2>&1 || return 1
+        current_enabled=0; rc-update show default 2>/dev/null | grep -qw zram-init && current_enabled=1
+        current_active=0; svc_is_active zram-init && current_active=1
+    else
+        [ "$zram_was_enabled" -eq 0 ] || systemctl enable zramswap >/dev/null 2>&1 || return 1
+        [ "$zram_was_active" -eq 0 ] || systemctl start zramswap >/dev/null 2>&1 || return 1
+        current_enabled=0; systemctl is-enabled --quiet zramswap 2>/dev/null && current_enabled=1
+        current_active=0; svc_is_active zramswap && current_active=1
+    fi
+    [ "$current_enabled" -eq "$zram_was_enabled" ] && [ "$current_active" -eq "$zram_was_active" ]
+}
 
 # =============================================================================
 # COMPONENT FUNCTIONS
@@ -96,25 +219,15 @@ zram_rollback() { if [ "$OS" = "alpine" ]; then rc-service zram-init stop 2>/dev
 configure_swap() {
     printf "\n${BLUE}--- Configuring SWAP ---${NC}\n"
 
-    mem_size_mb=$(free -m | awk '/^Mem:/{print $2}')
-    current_swap_mb=$(free -m | awk '/^Swap:/{print $2}')
+    mem_size_mb=$(normalize_ram_mib "$(awk '/^MemTotal:/{print $2}' /proc/meminfo)")
+    current_swap_mb=$(active_disk_swap_mib)
     swap_file_path="/swapfile_by_script"
 
-    # NOTE: BUG FIX - original had cleanup code embedded inside an elif branch
-    # body, but the indentation made it look like it was part of the elif condition.
-    # In bash it happened to work, but it's logically wrong and breaks in sh.
-    # Recommendation logic is now cleanly separated from cleanup logic.
-    if   [ "$mem_size_mb" -lt 512 ];   then recommended_swap_mb=1024
-    elif [ "$mem_size_mb" -lt 1024 ];  then recommended_swap_mb=1536
-    elif [ "$mem_size_mb" -lt 2048 ];  then recommended_swap_mb=2048
-    elif [ "$mem_size_mb" -lt 4096 ];  then recommended_swap_mb=3072
-    elif [ "$mem_size_mb" -lt 8192 ];  then recommended_swap_mb=4096
-    elif [ "$mem_size_mb" -lt 16384 ]; then recommended_swap_mb=6144
-    else recommended_swap_mb=8192
-    fi
+    recommended_swap_mb=$(recommend_disk_swap_mib "$mem_size_mb")
 
-    printf "Memory: %sMB, Current SWAP: %sMB\n" "$mem_size_mb" "$current_swap_mb"
-    printf "Recommended SWAP: %sMB. Enter desired size (MB) or press Enter: " "$recommended_swap_mb"
+    printf "Memory: %sMiB, ZRAM: %sMiB, disk SWAP: %sMiB\n" "$mem_size_mb" "$(active_zram_swap_mib)" "$current_swap_mb"
+    [ "$mem_size_mb" -gt 65536 ] && printf "${YELLOW}For RAM above 64GiB, 4096MiB is only a baseline; size by workload.${NC}\n"
+    printf "Recommended disk SWAP: %sMiB. Enter desired size or press Enter: " "$recommended_swap_mb"
     read -r user_target_mb
     target_swap_mb="${user_target_mb:-$recommended_swap_mb}"
 
@@ -146,7 +259,7 @@ configure_swap() {
         dd if=/dev/zero of="$swap_file_path" bs=1M count="$target_swap_mb" status=progress
     fi
 
-    if ! chmod 600 "$swap_file_path" || ! mkswap "$swap_file_path" > /dev/null 2>&1 || ! swapon "$swap_file_path"; then
+    if ! chmod 600 "$swap_file_path" || ! mkswap "$swap_file_path" > /dev/null 2>&1 || ! swapon -p 10 "$swap_file_path"; then
         rm -f "$swap_file_path"
         cp -a "$fstab_backup" /etc/fstab
         printf "${RED}SWAP activation failed; previous fstab restored.${NC}\n"
@@ -154,7 +267,7 @@ configure_swap() {
     fi
 
     if ! grep -qF "$swap_file_path" /etc/fstab; then
-        printf "%s none swap sw 0 0\n" "$swap_file_path" >> /etc/fstab
+        printf "%s none swap sw,pri=10 0 0\n" "$swap_file_path" >> /etc/fstab
     fi
 
     if ! grep -q "^vm.swappiness=10" /etc/sysctl.conf; then
@@ -183,22 +296,39 @@ install_chrony() {
 
 configure_zram() {
     printf "\n${BLUE}--- Configure ZRAM ---${NC}\n"
-    if is_container || zram_active || { [ -r /sys/module/zswap/parameters/enabled ] && [ "$(cat /sys/module/zswap/parameters/enabled)" = Y ]; } || ! zram_capable; then printf "${YELLOW}ZRAM skipped: existing, conflicting, or unsupported environment.${NC}\n"; return 0; fi
-    printf "ZRAM allocation percentage [50]: "; read -r zram_percent; zram_percent="${zram_percent:-50}"
-    case "$zram_percent" in ''|*[!0-9]*) return 1;; esac; [ "$zram_percent" -ge 10 ] && [ "$zram_percent" -le 100 ] || return 1
+    if is_container || { [ -r /sys/module/zswap/parameters/enabled ] && [ "$(cat /sys/module/zswap/parameters/enabled)" = Y ]; } || ! zram_capable; then printf "${YELLOW}ZRAM skipped: conflicting or unsupported environment.${NC}\n"; return 0; fi
+    ram_mib=$(normalize_ram_mib "$(awk '/^MemTotal:/{print $2}' /proc/meminfo)")
+    recommended_zram_mib=$(recommend_zram_mib "$ram_mib")
+    printf "Recommended ZRAM: %sMiB. Enter size or press Enter: " "$recommended_zram_mib"
+    read -r zram_size_mb; zram_size_mb="${zram_size_mb:-$recommended_zram_mib}"
+    case "$zram_size_mb" in 64|128|256|512|1024|2048|4096) ;; *) printf "${RED}Use one of: 64 128 256 512 1024 2048 4096.${NC}\n"; return 1 ;; esac
     if [ "$OS" = "alpine" ]; then
-        apk add --no-cache zram-init || return 1
-        zram_config=/etc/conf.d/zram-init; zram_backup="${zram_config}.bak_$(date +%s)"; [ -f "$zram_config" ] && cp -a "$zram_config" "$zram_backup"
-        mem_size_mb=$(free -m | awk '/^Mem:/{print $2}'); zram_size_mb=$((mem_size_mb * zram_percent / 100)); [ "$zram_size_mb" -ge 16 ] || zram_size_mb=16
-        printf 'load_on_start=yes\nunload_on_stop=no\nnum_devices=1\ntype0=swap\nflag0=100\nsize0=%s\nlabl0=zram_swap\n' "$zram_size_mb" > "$zram_config"
-        rc-update add zram-init default && rc-service zram-init start || { rc-update del zram-init default 2>/dev/null || true; [ -f "$zram_backup" ] && cp -a "$zram_backup" "$zram_config" || rm -f "$zram_config"; return 1; }; zram_service=zram-init
+        zram_config=/etc/conf.d/zram-init
+        zram_was_enabled=0; rc-update show default 2>/dev/null | grep -qw zram-init && zram_was_enabled=1
+        zram_was_active=0; svc_is_active zram-init && zram_was_active=1
+        zram_had_config=0; [ -f "$zram_config" ] && zram_had_config=1
+        [ -f "$zram_config" ] && ! managed_zram_config "$zram_config" && { printf "${YELLOW}Unmanaged ZRAM configuration exists; leaving it unchanged.${NC}\n"; return 0; }
+        zram_active && [ ! -f "$zram_config" ] && { printf "${YELLOW}Unmanaged ZRAM active; leaving it unchanged.${NC}\n"; return 0; }
+        zram_active && ! swapoff_has_headroom "$(awk 'NR>1 && $1 ~ /zram/ {sum += $4} END {printf "%d\n", sum}' /proc/swaps)" && { printf "${RED}Insufficient memory to resize ZRAM safely.${NC}\n"; return 1; }
+        zram_backup=""; [ "$zram_had_config" -eq 0 ] || { zram_backup="${zram_config}.bak_$(date +%s)"; cp -a "$zram_config" "$zram_backup" || return 1; }
+        printf '# Managed by linvpsliteinit.\nload_on_start=yes\nunload_on_stop=yes\nnum_devices=1\ntype0=swap\nflag0=100\nsize0=%s\nlabl0=zram_swap\n' "$zram_size_mb" > "$zram_config" || { restore_previous_zram; return 1; }
+        apk add --no-cache zram-init || { restore_previous_zram; return 1; }
+        rc-update add zram-init default && rc-service zram-init restart || { restore_previous_zram; return 1; }; zram_service=zram-init
     else
-        apt-get update > /dev/null && apt-get install -y zram-tools || return 1
-        zram_config=/etc/default/zramswap; zram_backup="${zram_config}.bak_$(date +%s)"; [ -f "$zram_config" ] && cp -a "$zram_config" "$zram_backup"
-        printf '# Managed by linvpsliteinit.\nPERCENT=%s\nPRIORITY=100\n' "$zram_percent" > "$zram_config"; zram_service=zramswap
-        systemctl enable "$zram_service" && systemctl restart "$zram_service" || { systemctl disable --now "$zram_service" 2>/dev/null || true; [ -f "$zram_backup" ] && cp -a "$zram_backup" "$zram_config" || rm -f "$zram_config"; return 1; }
+        zram_config=/etc/default/zramswap
+        zram_was_enabled=0; systemctl is-enabled --quiet zramswap 2>/dev/null && zram_was_enabled=1
+        zram_was_active=0; svc_is_active zramswap && zram_was_active=1
+        zram_had_config=0; [ -f "$zram_config" ] && zram_had_config=1
+        [ -f "$zram_config" ] && ! managed_zram_config "$zram_config" && { printf "${YELLOW}Unmanaged ZRAM configuration exists; leaving it unchanged.${NC}\n"; return 0; }
+        zram_active && [ ! -f "$zram_config" ] && { printf "${YELLOW}Unmanaged ZRAM active; leaving it unchanged.${NC}\n"; return 0; }
+        zram_active && ! swapoff_has_headroom "$(awk 'NR>1 && $1 ~ /zram/ {sum += $4} END {printf "%d\n", sum}' /proc/swaps)" && { printf "${RED}Insufficient memory to resize ZRAM safely.${NC}\n"; return 1; }
+        zram_backup=""; [ "$zram_had_config" -eq 0 ] || { zram_backup="${zram_config}.bak_$(date +%s)"; cp -a "$zram_config" "$zram_backup" || return 1; }
+        printf '# Managed by linvpsliteinit.\nSIZE=%s\nPRIORITY=100\n' "$zram_size_mb" > "$zram_config" || { restore_previous_zram; return 1; }
+        apt-get update > /dev/null && apt-get install -y zram-tools || { restore_previous_zram; return 1; }
+        zram_service=zramswap
+        systemctl enable "$zram_service" && systemctl restart "$zram_service" || { restore_previous_zram; return 1; }
     fi
-    svc_is_active "$zram_service" && zram_active || { zram_rollback; printf "${RED}ZRAM failed.${NC}\n"; return 1; }
+    svc_is_active "$zram_service" && zram_active || { restore_previous_zram; printf "${RED}ZRAM failed.${NC}\n"; return 1; }
 }
 
 setup_security_tools() {
@@ -727,6 +857,8 @@ main() {
         printf " 9) Install mosh\n"
         printf " 10) Install FRPS\n"
         printf " 11) Advanced Network Tuning\n"
+        printf " 12) Remove managed disk SWAP\n"
+        printf " 13) Remove managed ZRAM\n"
         printf -- "-------------------------------------------\n"
         printf " 99) Guided Install (all components)\n"
         printf " 0) Exit\n"
@@ -745,6 +877,8 @@ main() {
             9) install_mosh ;;
             10) install_frp ;;
             11) apply_advanced_network_tuning ;;
+            12) remove_managed_swap ;;
+            13) remove_managed_zram ;;
             99)
                 printf "${YELLOW}\nStarting Guided Installation...${NC}\n"
                 prompt_yes_no "Configure SWAP?"       && configure_swap

@@ -10,7 +10,7 @@
 ## ✨ 特徴
 - **一度の初期化、自由にスキップ**：ホスト名、タイムゾーン、ファイアウォール、Fail2Ban、SWAP、BBR
 - **後からコンポーネントを安全に追加**：何度でも再実行可能
-- **メモリ設定**：ディスク SWAP と任意の ZRAM；既存 swap を保護
+- **メモリ設定**：ディスク SWAP と ZRAM を個別に推奨・集計し、既存 swap を保護
 - **時刻同期**：任意の Chrony クライアント
 - **セキュリティ基盤**：インバウンド拒否・アウトバウンド許可がデフォルト；SSH ポートのみ開放
 - **Alpine 対応**：iptables ファイアウォール、OpenRC サービス管理、bash 不要（POSIX sh）
@@ -41,8 +41,8 @@ curl -fsSL https://raw.githubusercontent.com/tonysbb/linvpsliteinit/main/add_com
 
 ### 1) 初期化スクリプト `vps_init.sh`
 - ホスト名・タイムゾーン設定（RFC 1123 準拠）
-- SWAP：動的サイジング、Debian 11 の重複回避
-- ZRAM：能力確認付きの任意の圧縮 swap
+- ディスク SWAP：休止を前提としない基準で推奨し、ZRAM を容量集計から除外
+- ZRAM：RAM/2 を 64–4096 MiB の二進数段階へ切り下げ、能力と zswap を確認
 - Chrony：任意の NTP クライアント
 - ファイアウォール：Debian/Ubuntu は UFW + Fail2Ban；Alpine は iptables
 - BBR：カーネルが対応している場合に有効化
@@ -52,8 +52,8 @@ Debian/Ubuntu では、ファイアウォール手順を選ぶと UFW をその�
 
 ### 2) コンポーネントスクリプト `add_components.sh`
 再実行可能なメニュー形式のインストーラー：
-- SWAP 設定
-- ZRAM 設定
+- 管理対象ディスク SWAP の設定と安全な削除
+- 管理対象 ZRAM の設定と安全な削除
 - Chrony インストール
 - ファイアウォール（UFW + Fail2Ban / iptables）
 - BBR
@@ -69,7 +69,7 @@ Guided Install では「ホスト名・タイムゾーン」手順に直接入�
 `tcp_max_syn_backlog`、`rmem/wmem`、`nofile`、および任意の `TCP Fast Open`
 設定を適用します。
 
-`vps_init.sh` は新規インストール直後のクリーンなシステム向けです。`add_components.sh` は初期化済み、または業務を提供中のシステム向けで、選択したコンポーネント以外の設定を変更しません。ZRAM は圧縮 RAM swap であり、物理メモリを増やすものではありません。Chrony は NTP クライアントとしてのみ使用します。
+`vps_init.sh` は新規インストール直後のクリーンなシステム向けです。`add_components.sh` は初期化済み、または業務を提供中のシステム向けで、選択したコンポーネント以外の設定を変更しません。ZRAM は圧縮 RAM swap であり、物理メモリを増やすものではありません。既定値は正規化した RAM の半分を `64/128/256/512/1024/2048/4096 MiB` に切り下げ、上限を 4 GiB とします。ディスク SWAP は独立した基準を使い、ZRAM があっても自動縮小しません。削除は `/swapfile_by_script` と linvpsliteinit 管理マーカー付き ZRAM のみに限定します。Chrony は NTP クライアントとしてのみ使用します。
 
 ---
 
